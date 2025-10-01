@@ -4,6 +4,7 @@ const http = require('http');
 const express = require('express');
 const logger = require('morgan');
 const bodyParser = require('body-parser');
+const cors = require("cors");
 const hostname = process.env.HOST || 'localhost';
 const port = process.env.PORT || 4004;
 const app = express() // setup express application
@@ -13,9 +14,9 @@ const server = http.createServer(app);
 
 app.use(logger('dev')); // log requests to the console
 
-// Parse incoming requests data
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: false }));
+app.use(cors());
 
 app.get('/',adminAuth, (req, res) => res.status(200).send({
 message: 'Welcome to the default API route',
