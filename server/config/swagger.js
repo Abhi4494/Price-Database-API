@@ -17,7 +17,7 @@ const options = {
       {
         url: "https://api.claight.net/price_api/api/v1",
         description: "Dev Server",
-      },
+      }
     ],
     components: {
       securitySchemes: {
