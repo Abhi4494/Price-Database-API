@@ -5,6 +5,7 @@ const clientRoute = express.Router();
 
 const ClientController = require("../Controller/Admin/ClientController");
 const apiKeyAuth = require("../middlewares/clientAuth");
+const { apiLogger } = require("../middlewares/logger");
 
 
 /**
@@ -58,7 +59,7 @@ const apiKeyAuth = require("../middlewares/clientAuth");
  *       500:
  *         description: Server error
  */
-clientRoute.get("/list", apiKeyAuth, ClientController.getAllMaterials);
+clientRoute.get("/list",apiLogger, apiKeyAuth, ClientController.getAllMaterials);
 
 
 /**
@@ -87,9 +88,9 @@ clientRoute.get("/list", apiKeyAuth, ClientController.getAllMaterials);
  *       500:
  *         description: Server error
  */
-clientRoute.get('/view', apiKeyAuth, (req, res) => {
+clientRoute.get('/view',apiLogger, apiKeyAuth, (req, res) => {
   return res.status(400).json({ message: 'material ID is required' });
 });
-clientRoute.get('/view/:id',apiKeyAuth,ClientController.getMaterialById);
+clientRoute.get('/view/:id',apiLogger,apiKeyAuth,ClientController.getMaterialById);
 
 module.exports = clientRoute;
