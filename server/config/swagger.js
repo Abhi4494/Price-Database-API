@@ -10,10 +10,10 @@ const options = {
       description: "This API allows clients to manage and retrieve material pricing data",
     },
     servers: [
-    //   {
-    //     url: "http://localhost:4004/api/v1",
-    //     description: "Local server",
-    //   },
+      {
+        url: "http://localhost:4004/api/v1",
+        description: "Local server",
+      },
       {
         url: "https://api.claight.net/price_api/api/v1",
         description: "Dev Server",

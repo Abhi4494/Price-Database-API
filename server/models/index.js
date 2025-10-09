@@ -52,5 +52,9 @@ sequelize.authenticate().then(res => {
 db.SuperAdmin = require('./superadmin')(sequelize, Sequelize);
 db.Client = require('./client')(sequelize, Sequelize);
 db.MaterialPrice = require('./materialprice')(sequelize, Sequelize);
+db.Material = require('./material')(sequelize,Sequelize);
+
+db.Material.hasMany(db.MaterialPrice,{foreignKey:"material_id",as:"material_price"});
+db.MaterialPrice.belongsTo(db.Material,{foreignKey:"material_id",as:"material"});
 
 module.exports = db;

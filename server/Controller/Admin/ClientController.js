@@ -1,5 +1,5 @@
 const db = require("../../models");
-const { Sequelize, SuperAdmin,Client,MaterialPrice } = db;
+const { Sequelize, SuperAdmin,Client,MaterialPrice,Material } = db;
 const Op = Sequelize.Op;
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
@@ -203,14 +203,22 @@ const processMaterialPrice = async (batch, clientId, adminId, inserted, updated,
       const { unit_of_measurement, currency, measurment_type } = parseUnitCurrency(row.UnitofMeasurement);
 
       // Convert Excel month-year to DATE
-      console.log(row.Date,'AAA');
+      // console.log(row.Date,'AAA');
       const price_date = row.Date ? convertMonthYear(row.Date) : null;
+
+      // Step 1: find or create Material
+      const [material] = await Material.findOrCreate({
+        where: {
+          client_id: clientId,
+          series_name: row.SeriesName
+        },
+      });
 
       // Check if the record already exists
       const existing = await MaterialPrice.findOne({
         where: {
           client_id: clientId,
-          series_name: row.SeriesName,
+          material_id: material.id,
           region: row.Region,
           inco_term: row.IncoTerm,
           unit_of_measurement,
@@ -221,7 +229,7 @@ const processMaterialPrice = async (batch, clientId, adminId, inserted, updated,
 
       const recordData = {
         client_id: clientId,
-        series_name: row.SeriesName || null,
+        material_id: material.id,
         region: row.Region || null,
         inco_term: row.IncoTerm || null,
         unit_of_measurement, // full value USD/MT
@@ -300,7 +308,7 @@ const parseUnitCurrency = (value) => {
 
 const isValidDate = (dateStr) => /^\d{4}-\d{2}-\d{2}$/.test(dateStr);
 // All Material Price related functions
-const getAllMaterials = async (req, res) => {
+const getAllMaterialsOLD = async (req, res) => {
   try {
     const clientId = req.client.id;
     const { region, series, from_date, to_date,search  } = req.query;
@@ -376,13 +384,65 @@ const getAllMaterials = async (req, res) => {
   }
 };
 
+const getAllMaterials = async (req, res) => {
+  try {
+    const clientId = req.client.id;
+    const { series, search  } = req.query;
+    const { page, limit, offset } = getPagination(req);
+    const whereCondition = { client_id: clientId };
+    
+    if(series) whereCondition.series_name = series;
+    
+
+    if (search) {
+      whereCondition[Op.or] = [
+        { series_name: { [Op.like]: `%${search}%` } },
+      ];
+    }
+
+    const { count, rows } = await Material.findAndCountAll({
+      // attributes: { exclude: ['client_id','createdAt', 'updatedAt','price_date','admin_id'] },
+      where: whereCondition,
+      limit: limit,
+      offset: offset,
+      order: [['id', 'DESC']],
+    });
+
+    const newFromat = rows.map(item => {
+      return {
+        id: item.id, 
+        series_name: item.series_name,
+        
+      };
+    });   
+
+
+    return res.status(200).send({
+      statusCode: 200,
+      message: "Material list fetched successfully",
+      totalItems: count,
+      totalPages: Math.ceil(count / limit),
+      currentPage: page,
+      data: newFromat,
+    });  
+
+  } catch (error) {
+    return res.status(500).send({
+      statusCode: 500,
+      message: error.message,
+    });
+  }
+};
 
 const getMaterialById = async (req, res) => {
   try {
     const clientId = req.client.id;  // from apiKeyAuth middleware
     const { id } = req.params;
+    const { region,from_date, to_date,search,sort_by,order  } = req.query;
+    const { page, limit, offset } = getPagination(req);
 
-    const material = await MaterialPrice.findOne({
+    const material = await Material.findOne({
+      attributes:['id','series_name'],
       where: { id, client_id: clientId },
     });
 
@@ -393,22 +453,128 @@ const getMaterialById = async (req, res) => {
       });
     }
 
-    const formatted = {
-      id: material.id,
-      series_name: material.series_name,
-      region: material.region,
-      inco_term: material.inco_term,
-      unit_of_measurement: material.unit_of_measurement,
-      currency: material.currency,
-      measurment_type: material.measurment_type,
-      date: material.price_origin_value, // original uploaded date format
-      price: material.price,
+    
+    const whereCondition = { client_id: clientId,material_id:material.id };
+    if(region) whereCondition.region = region;
+   
+    if (from_date && to_date) {
+      if (!isValidDate(from_date) || !isValidDate(to_date)) {
+        return res.status(400).send({
+          statusCode: 400,
+          message: "Invalid date format. Use YYYY-MM-DD",
+        });
+      }
+      // ✅ Check if from_date is after to_date
+      if (new Date(from_date) > new Date(to_date)) {
+        return res.status(400).send({
+          statusCode: 400,
+          message: "from_date cannot be later than to_date",
+        });
+      }
+      whereCondition.price_date = { [Op.between]: [from_date, to_date] };
+    }
+
+    if (search) {
+      whereCondition[Op.or] = [
+        
+        { region: { [Op.like]: `%${search}%` } },
+        { inco_term: { [Op.like]: `%${search}%` } },
+        { unit_of_measurement: { [Op.like]: `%${search}%` } },
+        { currency: { [Op.like]: `%${search}%` } },
+        { measurment_type: { [Op.like]: `%${search}%` } },
+      ];
+    }
+
+    // ✅ Set ordering based on user input
+    // Default: sort by price_date DESC
+    const allowedSortFields = ['price_date', 'price', 'region', 'inco_term'];
+    const sortField = allowedSortFields.includes(sort_by) ? sort_by : 'price_date';
+    const sortOrder = order && ['ASC', 'DESC'].includes(order.toUpperCase()) ? order.toUpperCase() : 'DESC';
+
+    const { count, rows } = await MaterialPrice.findAndCountAll({
+      // attributes: { exclude: ['client_id','createdAt', 'updatedAt','price_date','admin_id'] },
+      where: whereCondition,
+      limit: limit,
+      offset: offset,
+      order: [[sortField, sortOrder]],
+    });
+
+    const newFromat = rows.map(item => {
+      return {
+        id: item.id, 
+        material_id: item.material_id,
+        region: item.region,
+        inco_term: item.inco_term,
+        unit_of_measurement: item.unit_of_measurement,
+        currency: item.currency,
+        measurment_type: item.measurment_type,
+        date: item.price_origin_value,
+        price: item.price,
+      };
+    }); 
+
+    const response_data = {
+      totalItems: count,
+      totalPages: Math.ceil(count / limit),
+      currentPage: page,
+      price_list: newFromat,
     };
 
     return res.status(200).send({
       statusCode: 200,
-      message: "Material fetched successfully",
-      data: formatted,
+      message: "Material Price List fetched successfully",
+      material_name:material.series_name,
+      material_id:material.id,
+      data: response_data,
+    });
+  } catch (error) {
+    return res.status(500).send({
+      statusCode: 500,
+      message: error.message,
+    });
+  }
+};
+
+
+const getPriceById = async (req, res) => {
+  try {
+    const clientId = req.client.id;  // from apiKeyAuth middleware
+    const { id } = req.params;
+    const whereCondition = { client_id: clientId,id:id };
+    const price_data = await MaterialPrice.findOne({
+      where: whereCondition,
+      include:[
+        {
+          model:Material,
+          as:"material",
+          attributes:['series_name']
+        }
+      ]
+    });
+    if(!price_data){
+        return res.status(404).send({
+        statusCode: 404,
+        message: "Material Price not found",
+      });
+    }
+
+    const newFromat = {
+        id: price_data.id, 
+        material_name:price_data.material.series_name,
+        material_id: price_data.material_id,
+        region: price_data.region,
+        inco_term: price_data.inco_term,
+        unit_of_measurement: price_data.unit_of_measurement,
+        currency: price_data.currency,
+        measurment_type: price_data.measurment_type,
+        date: price_data.price_origin_value,
+        price: price_data.price,
+      };
+
+    return res.status(200).send({
+      statusCode: 200,
+      message: "Material Price fetched successfully",
+      data: newFromat,
     });
   } catch (error) {
     return res.status(500).send({
@@ -420,5 +586,5 @@ const getMaterialById = async (req, res) => {
 
 
 module.exports = {
-  getAllClients,createClient,importMaterialPrice,getAllMaterials,getMaterialById
+  getAllClients,createClient,importMaterialPrice,getAllMaterials,getMaterialById,getPriceById
 };
