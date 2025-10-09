@@ -1,9 +1,4 @@
 node_modules/
 .env
 public/uploaded-files
-
-# Ignore all files inside public/logs
-/public/logs/*
-
-# But keep the folder itself in Git
-!public/logs/.gitkeep
+public/logs
