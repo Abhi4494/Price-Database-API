@@ -112,7 +112,7 @@ const createClient = async (req, res) => {
 }
 
 
-const importMaterialPrice = async (req, res) => {
+const importMaterialPriceOLD = async (req, res) => {
   try {
     masterCsvUpload(req, res, async function (err) {
       if (err) return res.status(500).send({ statusCode: 500, message: err.message });
@@ -194,7 +194,7 @@ const importMaterialPrice = async (req, res) => {
   }
 };
 
-const processMaterialPrice = async (batch, clientId, adminId, inserted, updated, skipped) => {
+const processMaterialPriceOLD = async (batch, clientId, adminId, inserted, updated, skipped) => {
   try {
     const rowsToUpsert = [];
 
@@ -247,6 +247,157 @@ const processMaterialPrice = async (batch, clientId, adminId, inserted, updated,
         updated.push(`${row.SeriesName} → ${row.Region} (${row.Date}) updated`);
       } else {
         // Insert
+        rowsToUpsert.push(recordData);
+        inserted.push(`${row.SeriesName} → ${row.Region} (${row.Date}) inserted`);
+      }
+    }
+
+    // Bulk insert new rows
+    if (rowsToUpsert.length > 0) {
+      await MaterialPrice.bulkCreate(rowsToUpsert);
+    }
+  } catch (err) {
+    console.error("Batch processing error:", err);
+    skipped.push(`Batch failed: ${err.message}`);
+  }
+};
+
+
+const importMaterialPrice = async (req, res) => {
+  try {
+    masterCsvUpload(req, res, async function (err) {
+      if (err) return res.status(500).send({ statusCode: 500, message: err.message });
+
+      const file = req.files?.csvFile?.[0];
+      const clientId = req.body.client_id;
+
+      if (!file || !clientId) {
+        return res.status(400).send({
+          statusCode: 400,
+          message: "CSV file and client ID are required.",
+        });
+      }
+
+      const company = await Client.findByPk(clientId);
+      if (!company) {
+        return res.status(404).send({ statusCode: 404, message: "Client Details not found." });
+      }
+
+      const filePath = file.path;
+      const rows = [];
+
+      // Helper clean function
+      const clean = (v) => (v ? v.toString().trim().normalize("NFC") : null);
+
+      fs.createReadStream(filePath, { encoding: "utf8" })
+        .pipe(
+          csv({
+            mapHeaders: ({ header }) => header.trim().replace(/^\uFEFF/, ""), // normalize headers
+          })
+        )
+        .on("data", (row) => {
+
+          const SeriesName = clean(row.SeriesName);
+          const Region = clean(row.Region);
+          const IncoTerm = clean(row.IncoTerm);
+          const UnitofMeasurement = clean(row.UnitofMeasurement);
+          const DateVal = clean(row.Date);
+          const PriceVal = clean(row.Price);
+
+          if (SeriesName && Region && IncoTerm && UnitofMeasurement && DateVal && PriceVal) {
+            rows.push({
+              SeriesName,
+              Region,
+              IncoTerm,
+              UnitofMeasurement,
+              Date: DateVal,
+              price: parseFloat(PriceVal),
+            });
+          }
+        })
+        .on("end", async () => {
+          const inserted = [];
+          const updated = [];
+          const skipped = [];
+
+          for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+            const batch = rows.slice(i, i + BATCH_SIZE);
+            await processMaterialPrice(batch, clientId, req.user.id, inserted, updated, skipped);
+          }
+
+          fs.unlinkSync(filePath);
+
+          return res.status(200).send({
+            statusCode: 200,
+            message: "Export Duty data processed successfully.",
+            inserted,
+            updated,
+            skipped,
+          });
+        });
+    });
+  } catch (error) {
+    console.error("Export Duty import error:", error);
+    return res.status(500).send({ statusCode: 500, message: error.message });
+  }
+};
+
+
+const processMaterialPrice = async (batch, clientId, adminId, inserted, updated, skipped) => {
+  try {
+    const rowsToUpsert = [];
+
+    for (const row of batch) {
+
+      // Split currency and unit
+      const { unit_of_measurement, currency, measurment_type } = parseUnitCurrency(row.UnitofMeasurement);
+
+      // Convert Excel month-year to DATE
+      const price_date = row.Date ? convertMonthYear(row.Date) : null;
+
+      // Step 1: find or create Material (safe with trim)
+      const [material] = await Material.findOrCreate({
+        where: {
+          client_id: clientId,
+          series_name: row.SeriesName?.trim(),
+        },
+        defaults: {
+          client_id: clientId,
+          series_name: row.SeriesName?.trim(),
+        },
+      });
+
+      // Check if record already exists
+      const existing = await MaterialPrice.findOne({
+        where: {
+          client_id: clientId,
+          material_id: material.id,
+          region: row.Region?.trim(),
+          inco_term: row.IncoTerm?.trim(),
+          unit_of_measurement,
+          currency,
+          price_date,
+        },
+      });
+
+      const recordData = {
+        client_id: clientId,
+        material_id: material.id,
+        region: row.Region?.trim() || null,
+        inco_term: row.IncoTerm?.trim() || null,
+        unit_of_measurement,
+        currency,
+        measurment_type,
+        price_date: convertMonthYear(row.Date),
+        price_origin_value: row.Date || null,
+        price: row.price || null,
+        admin_id: adminId,
+      };
+
+      if (existing) {
+        await existing.update(recordData);
+        updated.push(`${row.SeriesName} → ${row.Region} (${row.Date}) updated`);
+      } else {
         rowsToUpsert.push(recordData);
         inserted.push(`${row.SeriesName} → ${row.Region} (${row.Date}) inserted`);
       }
